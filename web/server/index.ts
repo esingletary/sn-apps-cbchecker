@@ -1,24 +1,15 @@
 import express from "express";
-import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = 3001;
-const DB_PATH = path.join(__dirname, "..", "data", "rooms.db");
+const DATA_DIR = path.join(__dirname, "..", "data");
+const DB_FILE = path.join(DATA_DIR, "rooms.json");
 
 app.use(express.json());
-
-// Initialize SQLite
-const db = new Database(DB_PATH);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS rooms (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    added_at TEXT DEFAULT (datetime('now'))
-  )
-`);
 
 // Types
 interface Room {
@@ -34,11 +25,27 @@ interface RoomStatus {
   url: string | null;
 }
 
+// JSON file storage helpers
+function loadRooms(): Room[] {
+  if (!existsSync(DB_FILE)) return [];
+  try {
+    const raw = readFileSync(DB_FILE, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function saveRooms(rooms: Room[]): void {
+  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(DB_FILE, JSON.stringify(rooms, null, 2), "utf-8");
+}
+
 // API Routes
 
 // Get all saved rooms
 app.get("/api/rooms", (_req, res) => {
-  const rooms = db.prepare("SELECT * FROM rooms ORDER BY added_at DESC").all();
+  const rooms = loadRooms();
   res.json(rooms);
 });
 
@@ -56,37 +63,45 @@ app.post("/api/rooms", (req, res) => {
     return;
   }
 
-  try {
-    const result = db
-      .prepare("INSERT INTO rooms (username) VALUES (?)")
-      .run(normalized);
-    const room = db
-      .prepare("SELECT * FROM rooms WHERE id = ?")
-      .get(result.lastInsertRowid);
-    res.status(201).json(room);
-  } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes("UNIQUE")) {
-      res.status(409).json({ error: "Room already saved" });
-      return;
-    }
-    throw err;
+  const rooms = loadRooms();
+
+  if (rooms.some((r) => r.username === normalized)) {
+    res.status(409).json({ error: "Room already saved" });
+    return;
   }
+
+  const newRoom: Room = {
+    id: Date.now(),
+    username: normalized,
+    added_at: new Date().toISOString(),
+  };
+
+  rooms.push(newRoom);
+  saveRooms(rooms);
+
+  res.status(201).json(newRoom);
 });
 
 // Delete a room
 app.delete("/api/rooms/:id", (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const result = db.prepare("DELETE FROM rooms WHERE id = ?").run(id);
-  if (result.changes === 0) {
+  const rooms = loadRooms();
+  const index = rooms.findIndex((r) => r.id === id);
+
+  if (index === -1) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
+
+  rooms.splice(index, 1);
+  saveRooms(rooms);
+
   res.json({ success: true });
 });
 
 // Check status of all rooms (batch)
 app.get("/api/rooms/status", async (_req, res) => {
-  const rooms = db.prepare("SELECT * FROM rooms").all() as Room[];
+  const rooms = loadRooms();
   const statuses = await Promise.all(rooms.map(checkRoomStatus));
   res.json(statuses);
 });

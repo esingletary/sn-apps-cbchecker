@@ -16,7 +16,7 @@ A self-hosted Chaturbate room tracker. Save your favorite rooms and check at a g
 |---|---|
 | Frontend | React 19, Vite 6, Tailwind CSS 4 |
 | Backend | Express 5, TypeScript |
-| Storage | SQLite via `better-sqlite3` |
+| Storage | JSON file (`data/rooms.json`) |
 | Language | TypeScript (strict mode) |
 
 ## Project Structure
@@ -43,7 +43,8 @@ cbchecker/
 │       │   └── AddRoomForm.tsx   # Username input form
 │       └── pages/
 │           └── Dashboard.tsx     # Main page (room grid + add form)
-└── data/                     # SQLite database (created at runtime)
+└── data/
+    └── rooms.json            # Room storage (created at runtime)
 ```
 
 ## Getting Started
@@ -100,7 +101,7 @@ All endpoints are prefixed with `/api`.
 ## How It Works
 
 1. The frontend calls `GET /api/rooms/status` to fetch all saved rooms and their current broadcast status.
-2. The Express server queries the SQLite database for saved rooms, then calls Chaturbate's `chatvideocontext` API for each username to determine if the room is live.
+2. The Express server reads the saved rooms from `data/rooms.json`, then calls Chaturbate's `chatvideocontext` API for each username to determine if the room is live.
 3. Results are returned as JSON and rendered as a grid of room cards.
 4. The frontend polls the status endpoint every 30 seconds to keep the UI up to date.
 

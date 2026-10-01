@@ -1,64 +1,102 @@
-import { RoomStatus } from "../api";
+import { useState } from "react";
+import { roomUrl, thumbUrl, type RoomStatus } from "../api";
+import { categorize, duration, statusLabel, timeAgo, type Category } from "../status";
 
-interface RoomCardProps {
-  status: RoomStatus;
-  onRemove: () => void;
+function detailLine(s: RoomStatus, cat: Category, now: number): string {
+  switch (cat) {
+    case "live":
+      return s.liveSince ? `Live for ${duration(s.liveSince, now)}` : "Live now";
+    case "offline":
+      return s.lastLiveAt ? `Last live ${timeAgo(s.lastLiveAt, now)}` : "Offline";
+    default:
+      return statusLabel(s);
+  }
 }
 
-export default function RoomCard({ status, onRemove }: RoomCardProps) {
-  const { username, isLive, roomStatus } = status;
+function Badge({ cat, label }: { cat: Category; label: string }) {
+  if (cat === "live") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded bg-red-600 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+        Live
+      </span>
+    );
+  }
+  if (cat === "show") {
+    return <span className="rounded bg-amber-400 px-1.5 py-0.5 text-[11px] font-semibold text-stone-950 shadow">{label}</span>;
+  }
+  if (cat === "not_found" || cat === "error") {
+    return (
+      <span className="rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white ring-1 ring-white/20 backdrop-blur-sm">
+        {label}
+      </span>
+    );
+  }
+  return null;
+}
+
+export default function RoomCard({ status, now, onRemove }: { status: RoomStatus; now: number; onRemove: () => void }) {
+  const { username } = status;
+  const cat = categorize(status);
+  const src = thumbUrl(username, status.checkedAt);
+  // Remember which thumbnail URL failed so a later refresh gets a fresh try.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const showThumb = cat === "live" && failedSrc !== src;
 
   return (
-    <div
-      className={`relative rounded-xl border p-4 transition-all ${
-        isLive
-          ? "border-green-500/30 bg-green-500/5 shadow-lg shadow-green-500/5"
-          : "border-zinc-800 bg-zinc-900/50"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <a
-            href={`https://chaturbate.com/${username}/`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-base font-semibold hover:text-orange-400 transition-colors truncate block"
-          >
-            {username}
-          </a>
-          <div className="mt-1.5 flex items-center gap-2">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                isLive ? "bg-green-500 animate-pulse" : "bg-zinc-600"
-              }`}
+    <div className="group relative overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-stone-200 transition hover:shadow-md dark:bg-stone-900 dark:ring-stone-700 dark:hover:shadow-lg dark:hover:ring-stone-500">
+      <a href={roomUrl(username)} target="_blank" rel="noopener noreferrer" className="block">
+        <div className="relative aspect-[4/3] overflow-hidden bg-stone-100 dark:bg-stone-800">
+          {showThumb ? (
+            <img
+              src={src}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              onError={() => setFailedSrc(src)}
+              className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
             />
-            <span
-              className={`text-sm font-medium ${
-                isLive ? "text-green-400" : "text-zinc-500"
-              }`}
-            >
-              {isLive ? "LIVE" : roomStatus === "error" ? "Error" : "Offline"}
-            </span>
+          ) : cat === "unknown" ? (
+            <div className="h-full w-full animate-pulse bg-stone-200 dark:bg-stone-800" />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <span
+                className={`text-5xl font-semibold uppercase ${
+                  cat === "show" ? "text-amber-500/40" : "text-stone-300 dark:text-stone-700"
+                }`}
+              >
+                {username[0]}
+              </span>
+            </div>
+          )}
+          <div className="absolute left-1.5 top-1.5">
+            <Badge cat={cat} label={statusLabel(status)} />
           </div>
         </div>
-        <button
-          onClick={onRemove}
-          className="text-zinc-600 hover:text-red-400 transition-colors text-lg leading-none p-1"
-          title="Remove room"
-        >
-          ✕
-        </button>
-      </div>
-      {isLive && (
-        <a
-          href={`https://chaturbate.com/${username}/`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-orange-400 hover:text-orange-300 transition-colors"
-        >
-          <span>▶</span> Watch now
-        </a>
-      )}
+        <div className="p-2.5">
+          <p className="truncate text-sm font-medium text-stone-900 dark:text-stone-200">{username}</p>
+          <p
+            className={`mt-0.5 truncate text-xs ${
+              cat === "live" ? "text-red-600 dark:text-red-400" : "text-stone-400 dark:text-stone-500"
+            }`}
+          >
+            {detailLine(status, cat, now)}
+          </p>
+        </div>
+      </a>
+      {/* Hidden until hover on pointer devices; always visible on touch. */}
+      <button
+        type="button"
+        onClick={onRemove}
+        title={`Remove ${username}`}
+        aria-label={`Remove ${username}`}
+        className="absolute right-1.5 top-1.5 flex items-center justify-center rounded bg-black/55 p-1 text-white ring-1 ring-white/20 backdrop-blur-sm transition hover:bg-red-600 focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
     </div>
   );
 }

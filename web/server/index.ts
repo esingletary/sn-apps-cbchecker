@@ -22,6 +22,10 @@ interface Room {
   id: number;
   username: string;
   added_at: string;
+  // Live history, persisted so it survives restarts. Written only on
+  // live/not-live transitions, not every poll.
+  live_since?: string | null;
+  last_live_at?: string | null;
 }
 
 interface RoomStatus {
@@ -31,9 +35,12 @@ interface RoomStatus {
   // plus our own: "not_found" (no such room), "error" (never checked
   // successfully), "unknown" (not checked yet).
   roomStatus: string;
-  url: string | null;
   checkedAt: string | null;
+  liveSince: string | null;
+  lastLiveAt: string | null;
 }
+
+type Check = Pick<RoomStatus, "username" | "isLive" | "roomStatus" | "checkedAt">;
 
 // --- Storage -----------------------------------------------------------------
 // Rooms live in memory; the file is only read at startup. A corrupt file is a
@@ -98,7 +105,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Returns a fresh status, or throws on transient failures (network, timeout,
 // 5xx, non-JSON challenge pages) so the caller can keep the last good value.
-async function fetchRoomStatus(username: string): Promise<RoomStatus> {
+async function fetchRoomStatus(username: string): Promise<Check> {
   const response = await fetch(`https://chaturbate.com/api/chatvideocontext/${username}/`, {
     headers: {
       "User-Agent":
@@ -115,7 +122,7 @@ async function fetchRoomStatus(username: string): Promise<RoomStatus> {
     throw new RateLimitedError(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null);
   }
   if (response.status === 404) {
-    return { username, isLive: false, roomStatus: "not_found", url: null, checkedAt };
+    return { username, isLive: false, roomStatus: "not_found", checkedAt };
   }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -126,7 +133,6 @@ async function fetchRoomStatus(username: string): Promise<RoomStatus> {
     username,
     isLive: data.room_status === "public",
     roomStatus: data.room_status || "unknown",
-    url: data.url || null,
     checkedAt,
   };
 }
@@ -136,27 +142,60 @@ async function fetchRoomStatus(username: string): Promise<RoomStatus> {
 // caches the results. API reads come from the cache, so clients never wait on
 // (or multiply) upstream requests.
 
-const statusCache = new Map<string, RoomStatus>();
+const statusCache = new Map<string, Check>();
+// Last poll time each room was seen live (in memory; feeds last_live_at).
+const lastSeenLive = new Map<string, string>();
 let backoffUntil = 0;
 let backoffMs = 0;
 let lastPollAt: string | null = null;
 let pollTimer: NodeJS.Timeout | undefined;
+let pollInFlight: Promise<void> | null = null;
 let stopping = false;
 
 async function checkAndCache(username: string): Promise<void> {
   try {
-    statusCache.set(username, await fetchRoomStatus(username));
+    const check = await fetchRoomStatus(username);
+    statusCache.set(username, check);
+    recordLiveTransition(check);
   } catch (err) {
     if (err instanceof RateLimitedError) throw err;
     console.warn(`status check failed for ${username}:`, (err as Error).message);
     // Keep the last good status; only record an error if we have nothing.
     if (!statusCache.has(username)) {
-      statusCache.set(username, { username, isLive: false, roomStatus: "error", url: null, checkedAt: null });
+      statusCache.set(username, { username, isLive: false, roomStatus: "error", checkedAt: null });
     }
   }
 }
 
-async function pollAll(): Promise<void> {
+function recordLiveTransition(check: Check): void {
+  const room = rooms.find((r) => r.username === check.username);
+  if (!room) return; // removed while the check was in flight, or not saved
+
+  const wasLive = Boolean(room.live_since);
+  if (check.isLive) {
+    lastSeenLive.set(room.username, check.checkedAt!);
+    if (!wasLive) {
+      room.live_since = check.checkedAt;
+      saveRooms();
+    }
+  } else if (wasLive) {
+    // If we restarted mid-stream we never saw it live this process; the start
+    // of the stream is the best lower bound we have.
+    room.last_live_at = lastSeenLive.get(room.username) ?? room.live_since;
+    room.live_since = null;
+    saveRooms();
+  }
+}
+
+// Shared by the loop and manual refreshes so they never overlap.
+function pollAll(): Promise<void> {
+  pollInFlight ??= runPoll().finally(() => {
+    pollInFlight = null;
+  });
+  return pollInFlight;
+}
+
+async function runPoll(): Promise<void> {
   if (Date.now() < backoffUntil) return;
 
   const queue = rooms.map((r) => r.username);
@@ -196,10 +235,14 @@ async function pollLoop(): Promise<void> {
   if (!stopping) pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
 }
 
-function cachedStatus(username: string): RoomStatus {
-  return (
-    statusCache.get(username) ?? { username, isLive: false, roomStatus: "unknown", url: null, checkedAt: null }
-  );
+function roomStatus(room: Room): RoomStatus {
+  const check = statusCache.get(room.username) ?? {
+    username: room.username,
+    isLive: false,
+    roomStatus: "unknown",
+    checkedAt: null,
+  };
+  return { ...check, liveSince: room.live_since ?? null, lastLiveAt: room.last_live_at ?? null };
 }
 
 // --- API routes --------------------------------------------------------------
@@ -260,13 +303,21 @@ app.delete("/api/rooms/:id", (req, res) => {
   const [removed] = rooms.splice(index, 1);
   saveRooms();
   statusCache.delete(removed.username);
+  lastSeenLive.delete(removed.username);
 
   res.json({ success: true });
 });
 
 // Status of all saved rooms (from the poller's cache)
 app.get("/api/rooms/status", (_req, res) => {
-  res.json(rooms.map((r) => cachedStatus(r.username)));
+  res.json(rooms.map(roomStatus));
+});
+
+// Force a poll now (debounced), then return fresh statuses
+app.post("/api/rooms/refresh", async (_req, res) => {
+  const recentlyPolled = lastPollAt && Date.now() - Date.parse(lastPollAt) < 5000;
+  if (!recentlyPolled) await pollAll();
+  res.json(rooms.map(roomStatus));
 });
 
 // Status of a single room: cached if saved, otherwise checked live
@@ -276,12 +327,13 @@ app.get("/api/rooms/:username/status", async (req, res) => {
     res.status(400).json({ error: "Invalid username" });
     return;
   }
-  if (rooms.some((r) => r.username === username)) {
-    res.json(cachedStatus(username));
+  const room = rooms.find((r) => r.username === username);
+  if (room) {
+    res.json(roomStatus(room));
     return;
   }
   try {
-    res.json(await fetchRoomStatus(username));
+    res.json({ ...(await fetchRoomStatus(username)), liveSince: null, lastLiveAt: null });
   } catch (err) {
     const status = err instanceof RateLimitedError ? 429 : 502;
     res.status(status).json({ error: (err as Error).message });
@@ -295,7 +347,17 @@ app.use("/api", (_req, res) => {
 
 // Serve static files in production
 const distPath = path.join(__dirname, "..", "dist");
-app.use(express.static(distPath));
+app.use(
+  express.static(distPath, {
+    // Vite's hashed bundles never change; everything else (index.html, sw.js,
+    // manifest) revalidates so a redeploy is picked up straight away.
+    setHeaders(res, filePath) {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  })
+);
 app.use((_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });

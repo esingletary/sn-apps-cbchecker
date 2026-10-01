@@ -1,57 +1,125 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-interface AddRoomFormProps {
-  onAdd: (username: string) => Promise<void>;
-}
+type OnAdd = (username: string) => Promise<void>;
 
-export default function AddRoomForm({ onAdd }: AddRoomFormProps) {
-  const [username, setUsername] = useState("");
-  const [loading, setLoading] = useState(false);
+const INPUT_CLASS =
+  "w-full rounded border border-stone-200 bg-stone-50 px-3 text-base text-stone-700 placeholder-stone-400 outline-none focus:border-stone-400 focus:bg-white disabled:opacity-60 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-200 dark:placeholder-stone-500 dark:focus:border-stone-500 dark:focus:bg-stone-800";
+
+const PLACEHOLDER = "Add username or room link…";
+
+// Shared submit state for the inline (desktop) and dialog (mobile) forms.
+function useAddRoom(onAdd: OnAdd, onError?: (message: string) => void) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = username.trim();
-    if (!trimmed) return;
-
-    setLoading(true);
+  const submit = async (): Promise<boolean> => {
+    const v = value.trim();
+    if (!v || busy) return false;
+    setBusy(true);
     setError(null);
-
     try {
-      await onAdd(trimmed);
-      setUsername("");
+      await onAdd(v);
+      setValue("");
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add room");
+      const message = err instanceof Error ? err.message : "Failed to add room";
+      setError(message);
+      onError?.(message);
+      return false;
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
+  return { value, setValue, busy, error, submit };
+}
+
+const inputProps = {
+  type: "text",
+  placeholder: PLACEHOLDER,
+  enterKeyHint: "go",
+  autoCapitalize: "none",
+  autoCorrect: "off",
+  spellCheck: false,
+} as const;
+
+// Header search-style input, shown from md up (like zscraper's search box).
+export default function AddRoomForm({ onAdd, onError }: { onAdd: OnAdd; onError: (message: string) => void }) {
+  const { value, setValue, busy, submit } = useAddRoom(onAdd, onError);
+
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2">
-      <div className="flex-1 relative">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm">
-          chaturbate.com/
-        </span>
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="username"
-          className="w-full rounded-lg bg-zinc-900 border border-zinc-800 pl-36 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20 transition-colors"
-          disabled={loading}
-        />
-      </div>
-      <button
-        type="submit"
-        disabled={loading || !username.trim()}
-        className="px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white text-sm font-medium transition-colors"
-      >
-        {loading ? "..." : "Add"}
-      </button>
-      {error && (
-        <p className="absolute -bottom-6 left-0 text-xs text-red-400">{error}</p>
-      )}
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      className="relative hidden max-w-xs flex-1 md:block"
+    >
+      <input
+        {...inputProps}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        disabled={busy}
+        aria-label="Add room"
+        className={`${INPUT_CLASS} py-1.5`}
+      />
     </form>
+  );
+}
+
+// Mobile: modal sheet, same markup as zscraper's mobile search.
+export function AddRoomDialog({ onAdd, onClose }: { onAdd: OnAdd; onClose: () => void }) {
+  const { value, setValue, busy, error, submit } = useAddRoom(onAdd);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[calc(1rem_+_env(safe-area-inset-top))]"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (await submit()) onClose();
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-lg bg-white p-4 shadow-xl dark:bg-stone-900"
+      >
+        <input
+          {...inputProps}
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={busy}
+          aria-label="Add room"
+          className={`${INPUT_CLASS} py-2`}
+        />
+        {error && <p className="mt-2 text-xs text-red-500 dark:text-red-400">{error}</p>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded px-3 py-1.5 text-sm text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !value.trim()}
+            className="rounded bg-stone-800 px-3 py-1.5 text-sm text-white hover:bg-stone-700 disabled:opacity-50 dark:bg-stone-200 dark:text-stone-900 dark:hover:bg-stone-300"
+          >
+            {busy ? "Adding…" : "Add"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

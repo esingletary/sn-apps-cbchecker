@@ -4,17 +4,18 @@ A self-hosted Chaturbate room tracker. Save your favorite rooms and check at a g
 
 ## Features
 
-- **Save rooms** -- Add any Chaturbate username to your watchlist
-- **Live status** -- See which rooms are currently broadcasting (checked server-side every 30 seconds)
-- **Quick links** -- Click through to any room directly
-- **Persistent storage** -- Rooms are saved in a local JSON file (atomic writes)
-- **Lightweight** -- Single Express server + React SPA, no external services required
+- **Save rooms** -- Add a username or paste a room link
+- **Live status at a glance** -- Live rooms first with a live thumbnail and "live for 23m"; private/group/away shown distinctly; offline rooms sorted by "last live 3h ago"
+- **Server-side checks** -- One background poller (every 30s) no matter how many tabs are open; "↻" forces a check now
+- **Undo** -- Removing a room can be undone for 5 seconds
+- **Installable PWA** -- Add to home screen on iOS/Android; app shell is precached
+- **Lightweight** -- Single Express server + React SPA, JSON file storage
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, Vite 6, Tailwind CSS 4 |
+| Frontend | React 19, Vite 6, Tailwind CSS 4, vite-plugin-pwa |
 | Backend | Express 5, TypeScript |
 | Storage | JSON file (`data/rooms.json`) |
 | Language | TypeScript (strict mode) |
@@ -95,6 +96,7 @@ All endpoints are prefixed with `/api`.
 | `POST` | `/api/rooms` | Add a room -- body: `{ "username": "example_model" }` |
 | `DELETE` | `/api/rooms/:id` | Remove a room by ID |
 | `GET` | `/api/rooms/status` | Cached status for all saved rooms (from the background poller) |
+| `POST` | `/api/rooms/refresh` | Poll upstream now (debounced to 5s), return fresh statuses |
 | `GET` | `/api/health` | Health check (room count, last poll time, rate-limit backoff) |
 | `GET` | `/api/rooms/:username/status` | Get live status for a single room |
 
@@ -105,8 +107,9 @@ All endpoints are prefixed with `/api`.
   "username": "example_model",
   "isLive": true,
   "roomStatus": "public",
-  "url": "https://edge17-hel.live.mmcdn.com/live-hls/...",
-  "checkedAt": "2026-10-01T05:12:46.834Z"
+  "checkedAt": "2026-10-01T05:12:46.834Z",
+  "liveSince": "2026-10-01T04:50:02.112Z",
+  "lastLiveAt": null
 }
 ```
 
@@ -118,7 +121,10 @@ All endpoints are prefixed with `/api`.
 1. A background loop on the server calls Chaturbate's `chatvideocontext` API for each saved room every 30 seconds (4 at a time, with jitter) and caches the results. On HTTP 429 it backs off (honouring `Retry-After`, otherwise exponential up to 10 min).
 2. Transient failures (timeouts, 5xx, challenge pages) keep the last good status instead of flipping the room to offline. A 404 is reported as `not_found`.
 3. `GET /api/rooms/status` answers instantly from the cache, so any number of open tabs cost no extra upstream requests.
-4. The frontend polls the status endpoint every 30 seconds.
+4. Live/offline transitions are written to `rooms.json` (`live_since`, `last_live_at`) so history survives restarts.
+5. The frontend reads the cache every 15 seconds while visible, and pauses when the tab or PWA is in the background.
+
+Home-screen icons and iOS launch screens are generated from `web/src/images/logo-mark.svg` by `pnpm --filter web gen:icons`.
 
 ## License
 

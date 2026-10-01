@@ -118,6 +118,7 @@ export default function Dashboard() {
                     isLive: false,
                     roomStatus: "unknown",
                     url: null,
+                    checkedAt: null,
                   }
                 }
                 onRemove={() => handleRemove(room.id)}

@@ -5,9 +5,9 @@ A self-hosted Chaturbate room tracker. Save your favorite rooms and check at a g
 ## Features
 
 - **Save rooms** -- Add any Chaturbate username to your watchlist
-- **Live status** -- See which rooms are currently broadcasting (auto-refreshes every 30 seconds)
+- **Live status** -- See which rooms are currently broadcasting (checked server-side every 30 seconds)
 - **Quick links** -- Click through to any room directly
-- **Persistent storage** -- Rooms are saved in a local SQLite database
+- **Persistent storage** -- Rooms are saved in a local JSON file (atomic writes)
 - **Lightweight** -- Single Express server + React SPA, no external services required
 
 ## Tech Stack
@@ -31,7 +31,7 @@ cbchecker/
 │   ├── tsconfig.server.json  # Backend TS config
 │   ├── index.html
 │   ├── server/
-│   │   └── index.ts          # Express server + SQLite + Chaturbate API client
+│   │   └── index.ts          # Express server, JSON storage, background status poller
 │   └── src/
 │       ├── main.tsx          # React entry point
 │       ├── App.tsx           # Routes
@@ -63,6 +63,19 @@ pnpm dev
 
 The frontend dev server starts on `http://localhost:5173` and the API server on `http://localhost:3001`. Vite proxies `/api` requests to the backend automatically.
 
+### Deploy (SingNet)
+
+Runs as a Docker stack behind the central Caddy (`/opt/stacks/caddy`) at
+**https://cb.sing.sh**, over the shared external `proxy` network. The watchlist
+lives in `./data/rooms.json` (bind-mounted at `/data`).
+
+```bash
+pnpm deploy   # docker compose up -d --build
+```
+
+If `rooms.json` is unreadable the server refuses to start (rather than
+treating it as empty and overwriting it) — check `docker logs cbchecker`.
+
 ### Production Build
 
 ```bash
@@ -81,7 +94,8 @@ All endpoints are prefixed with `/api`.
 | `GET` | `/api/rooms` | List all saved rooms |
 | `POST` | `/api/rooms` | Add a room -- body: `{ "username": "example_model" }` |
 | `DELETE` | `/api/rooms/:id` | Remove a room by ID |
-| `GET` | `/api/rooms/status` | Get live status for all saved rooms |
+| `GET` | `/api/rooms/status` | Cached status for all saved rooms (from the background poller) |
+| `GET` | `/api/health` | Health check (room count, last poll time, rate-limit backoff) |
 | `GET` | `/api/rooms/:username/status` | Get live status for a single room |
 
 ### Status Response Shape
@@ -91,19 +105,20 @@ All endpoints are prefixed with `/api`.
   "username": "example_model",
   "isLive": true,
   "roomStatus": "public",
-  "url": "https://edge17-hel.live.mmcdn.com/live-hls/..."
+  "url": "https://edge17-hel.live.mmcdn.com/live-hls/...",
+  "checkedAt": "2026-10-01T05:12:46.834Z"
 }
 ```
 
 - `isLive` is `true` when `roomStatus` is `"public"`
-- `roomStatus` can be `"public"` (live), `"private"`, `"offline"`, or `"error"`
+- `roomStatus` is the upstream value (`"public"`, `"private"`, `"away"`, `"hidden"`, `"offline"`, …) or one of `"not_found"`, `"error"` (never checked successfully), `"unknown"` (not checked yet)
 
 ## How It Works
 
-1. The frontend calls `GET /api/rooms/status` to fetch all saved rooms and their current broadcast status.
-2. The Express server reads the saved rooms from `data/rooms.json`, then calls Chaturbate's `chatvideocontext` API for each username to determine if the room is live.
-3. Results are returned as JSON and rendered as a grid of room cards.
-4. The frontend polls the status endpoint every 30 seconds to keep the UI up to date.
+1. A background loop on the server calls Chaturbate's `chatvideocontext` API for each saved room every 30 seconds (4 at a time, with jitter) and caches the results. On HTTP 429 it backs off (honouring `Retry-After`, otherwise exponential up to 10 min).
+2. Transient failures (timeouts, 5xx, challenge pages) keep the last good status instead of flipping the room to offline. A 404 is reported as `not_found`.
+3. `GET /api/rooms/status` answers instantly from the cache, so any number of open tabs cost no extra upstream requests.
+4. The frontend polls the status endpoint every 30 seconds.
 
 ## License
 

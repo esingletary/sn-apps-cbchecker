@@ -1,0 +1,35 @@
+services:
+  cbchecker:
+    build: .
+    image: cbchecker:local
+    container_name: cbchecker
+    restart: unless-stopped
+    # Run as the host `es` user so ./data stays es-owned.
+    user: "1000:1000"
+    # tini as PID 1: forwards SIGTERM to node so restarts are instant instead
+    # of waiting out Docker's 10s kill timeout.
+    init: true
+    # No published ports. The central Caddy stack (/opt/stacks/caddy)
+    # terminates TLS for https://cb.sing.sh and reverse-proxies here as
+    # `cbchecker:3001` over the shared `proxy` network.
+    expose:
+      - "3001"
+    volumes:
+      # Watchlist (rooms.json). Kept in-stack so the tree moves as one rsync
+      # and is covered by the nightly restic backup of /opt/stacks.
+      - ./data:/data
+    # The slim image has no curl/wget, so probe with node's built-in fetch.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - proxy
+
+networks:
+  # Shared reverse-proxy network owned by the caddy stack. Join it; don't
+  # create it here. (Created once with: docker network create proxy)
+  proxy:
+    external: true

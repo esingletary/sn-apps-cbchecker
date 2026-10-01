@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "concurrently \"pnpm --filter web dev:server\" \"pnpm --filter web dev:client\"",
     "build": "pnpm --filter web build",
-    "start": "pnpm --filter web start"
+    "start": "pnpm --filter web start",
+    "deploy": "docker compose up -d --build"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

@@ -9,6 +9,7 @@ export interface RoomStatus {
   isLive: boolean;
   roomStatus: string;
   url: string | null;
+  checkedAt: string | null;
 }
 
 export async function fetchRooms(): Promise<Room[]> {

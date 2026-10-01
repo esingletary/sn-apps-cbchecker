@@ -53,11 +53,15 @@ export async function fetchRoomStatuses(): Promise<RoomStatus[]> {
   return res.json();
 }
 
-// Asks the server to poll upstream now rather than waiting for its next cycle.
-export async function refreshRoomStatuses(): Promise<RoomStatus[]> {
-  const res = await fetch("/api/rooms/refresh", { method: "POST" });
-  if (!res.ok) throw await errorFrom(res, "Failed to refresh");
-  return res.json();
+export class StreamUnavailableError extends Error {}
+
+// Fresh tokenised HLS URL. Throws StreamUnavailableError when the room isn't
+// in a public show (offline, private, ...), so the player can say so.
+export async function fetchStreamUrl(username: string): Promise<string> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(username)}/stream`, { cache: "no-store" });
+  if (res.status === 409) throw new StreamUnavailableError((await res.json()).error);
+  if (!res.ok) throw await errorFrom(res, "Couldn't load stream");
+  return (await res.json()).src;
 }
 
 export function roomUrl(username: string): string {

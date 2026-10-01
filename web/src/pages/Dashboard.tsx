@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { addRoom, deleteRoom, fetchRooms, fetchRoomStatuses, refreshRoomStatuses, type Room, type RoomStatus } from "../api";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { addRoom, deleteRoom, fetchRooms, fetchRoomStatuses, type Room, type RoomStatus } from "../api";
 import { categorize, compareStatuses, timeAgo } from "../status";
 import { useNow } from "../hooks/useNow";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
@@ -10,9 +10,14 @@ import RoomCard from "../components/RoomCard";
 import AddRoomForm, { AddRoomDialog } from "../components/AddRoomForm";
 import Toast, { type ToastData } from "../components/Toast";
 
-// The server polls upstream every 30s; reading its cache is cheap, so check
-// it more often to pick up changes soon after they land.
+// Split out (with hls.js behind it) so the dashboard stays light.
+const StreamPlayer = lazy(() => import("../components/StreamPlayer"));
+
+// The server checks upstream continuously; reading its cache is cheap, so
+// check it often to pick up changes soon after they land.
 const POLL_MS = 15_000;
+// Past this, the server is probably being rate-limited; say so.
+const STALE_MS = 3 * 60_000;
 const UNDO_MS = 5_000;
 
 function placeholderStatus(username: string): RoomStatus {
@@ -36,6 +41,23 @@ export default function Dashboard() {
   const showError = useCallback((message: string) => showToast({ message, tone: "error" }), [showToast]);
   const dismissToast = useCallback(() => setToast(null), []);
   const closeAdd = useCallback(() => setAddOpen(false), []);
+
+  // The player is a history entry, so the back button/gesture closes it
+  // (important in the installed PWA, which has no browser chrome).
+  const [playing, setPlaying] = useState<string | null>(null);
+  const openPlayer = useCallback((username: string) => {
+    history.pushState({ cbPlayer: username }, "");
+    setPlaying(username);
+  }, []);
+  const closePlayer = useCallback(() => {
+    if (history.state?.cbPlayer) history.back();
+    else setPlaying(null);
+  }, []);
+  useEffect(() => {
+    const onPop = () => setPlaying(history.state?.cbPlayer ?? null);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const applyStatuses = (list: RoomStatus[]) => setStatuses(new Map(list.map((s) => [s.username, s])));
 
@@ -80,8 +102,8 @@ export default function Dashboard() {
   const handleAdd = async (username: string) => {
     const room = await addRoom(username);
     setRooms((prev) => [...prev, room]);
-    // The server checks a new room straight away; pick that up shortly.
-    setTimeout(loadStatuses, 1500);
+    // A new room is next in line for the server's checker; pick it up shortly.
+    setTimeout(loadStatuses, 6000);
   };
 
   const handleRemove = (room: Room) => {
@@ -111,15 +133,12 @@ export default function Dashboard() {
     });
   };
 
+  // Re-reads the server's cache. Deliberately doesn't force upstream checks:
+  // bursts are what get us rate-limited.
   const handleRefresh = async () => {
     setRefreshing(true);
-    try {
-      applyStatuses(await refreshRoomStatuses());
-    } catch (err) {
-      showError(err instanceof Error ? err.message : "Refresh failed");
-    } finally {
-      setRefreshing(false);
-    }
+    await Promise.all([loadStatuses(), new Promise((r) => setTimeout(r, 400))]);
+    setRefreshing(false);
   };
 
   const entries = rooms
@@ -144,7 +163,7 @@ export default function Dashboard() {
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </IconButton>
-        <IconButton onClick={handleRefresh} disabled={refreshing} title="Check now">
+        <IconButton onClick={handleRefresh} disabled={refreshing} title="Reload">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="16"
@@ -191,11 +210,26 @@ export default function Dashboard() {
             <span className={liveCount ? "font-medium text-red-600 dark:text-red-400" : ""}>{liveCount} live</span>
             {showCount > 0 && <> · {showCount} in shows</>} · {entries.length} saved
           </p>
-          {updatedAt && <p className="shrink-0 text-xs text-stone-400 dark:text-stone-500">Updated {timeAgo(updatedAt, now)}</p>}
+          {updatedAt && (
+            <p
+              className={`shrink-0 text-xs ${
+                now - Date.parse(updatedAt) > STALE_MS ? "text-amber-600 dark:text-amber-400" : "text-stone-400 dark:text-stone-500"
+              }`}
+              title={now - Date.parse(updatedAt) > STALE_MS ? "Checks are paused or slowed, likely rate-limited upstream" : undefined}
+            >
+              Updated {timeAgo(updatedAt, now)}
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
           {entries.map(({ room, status }) => (
-            <RoomCard key={room.id} status={status} now={now} onRemove={() => handleRemove(room)} />
+            <RoomCard
+              key={room.id}
+              status={status}
+              now={now}
+              onRemove={() => handleRemove(room)}
+              onPlay={() => openPlayer(room.username)}
+            />
           ))}
         </div>
       </>
@@ -206,6 +240,11 @@ export default function Dashboard() {
     <Layout actions={actions}>
       {body}
       {addOpen && <AddRoomDialog onAdd={handleAdd} onClose={closeAdd} />}
+      {playing && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 bg-black" />}>
+          <StreamPlayer key={playing} username={playing} onClose={closePlayer} />
+        </Suspense>
+      )}
       <Toast toast={toast} durationMs={UNDO_MS} onDismiss={dismissToast} />
     </Layout>
   );

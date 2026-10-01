@@ -35,7 +35,17 @@ function Badge({ cat, label }: { cat: Category; label: string }) {
   return null;
 }
 
-export default function RoomCard({ status, now, onRemove }: { status: RoomStatus; now: number; onRemove: () => void }) {
+export default function RoomCard({
+  status,
+  now,
+  onRemove,
+  onPlay,
+}: {
+  status: RoomStatus;
+  now: number;
+  onRemove: () => void;
+  onPlay: () => void;
+}) {
   const { username } = status;
   const cat = categorize(status);
   const src = thumbUrl(username, status.checkedAt);
@@ -45,7 +55,19 @@ export default function RoomCard({ status, now, onRemove }: { status: RoomStatus
 
   return (
     <div className="group relative overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-stone-200 transition hover:shadow-md dark:bg-stone-900 dark:ring-stone-700 dark:hover:shadow-lg dark:hover:ring-stone-500">
-      <a href={roomUrl(username)} target="_blank" rel="noopener noreferrer" className="block">
+      <a
+        href={roomUrl(username)}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => {
+          // Live rooms play in-app. Modified clicks (cmd/ctrl/shift/middle)
+          // still open the site in a new tab as usual.
+          if (cat !== "live" || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          onPlay();
+        }}
+        className="block"
+      >
         <div className="relative aspect-[4/3] overflow-hidden bg-stone-100 dark:bg-stone-800">
           {showThumb ? (
             <img
@@ -72,6 +94,15 @@ export default function RoomCard({ status, now, onRemove }: { status: RoomStatus
           <div className="absolute left-1.5 top-1.5">
             <Badge cat={cat} label={statusLabel(status)} />
           </div>
+          {cat === "live" && (
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 transition group-hover:opacity-100">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/55 text-white ring-1 ring-white/20 backdrop-blur-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14Z" />
+                </svg>
+              </span>
+            </div>
+          )}
         </div>
         <div className="p-2.5">
           <p className="truncate text-sm font-medium text-stone-900 dark:text-stone-200">{username}</p>

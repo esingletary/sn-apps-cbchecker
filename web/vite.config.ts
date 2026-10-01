@@ -19,6 +19,9 @@ export default defineConfig({
         // Precache the app shell so launches paint from disk instead of the network.
         // API responses and room thumbnails are live data and are never cached.
         globPatterns: ["**/*.{js,css,html,svg,webmanifest}"],
+        // hls.js is only fetched when a stream opens on non-Safari browsers
+        // (iOS plays HLS natively), so don't make every install download it.
+        globIgnores: ["**/hls-*.js"],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         navigateFallback: "/index.html",

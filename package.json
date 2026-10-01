@@ -1,0 +1,14 @@
+{
+  "name": "cbchecker",
+  "version": "0.1.0",
+  "private": true,
+
+  "scripts": {
+    "dev": "concurrently \"npm --prefix web run dev:server\" \"npm --prefix web run dev:client\"",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

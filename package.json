@@ -2,11 +2,11 @@
   "name": "cbchecker",
   "version": "0.1.0",
   "private": true,
-
+  "packageManager": "pnpm@10.32.1",
   "scripts": {
-    "dev": "concurrently \"npm --prefix web run dev:server\" \"npm --prefix web run dev:client\"",
-    "build": "npm --prefix web run build",
-    "start": "npm --prefix web start"
+    "dev": "concurrently \"pnpm --filter web dev:server\" \"pnpm --filter web dev:client\"",
+    "build": "pnpm --filter web build",
+    "start": "pnpm --filter web start"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

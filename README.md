@@ -51,14 +51,14 @@ cbchecker/
 
 ### Prerequisites
 
-- Node.js 22+ and npm
+- Node.js 22+ and pnpm
 
 ### Install & Run
 
 ```bash
 cd cbchecker
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 The frontend dev server starts on `http://localhost:5173` and the API server on `http://localhost:3001`. Vite proxies `/api` requests to the backend automatically.
@@ -66,8 +66,8 @@ The frontend dev server starts on `http://localhost:5173` and the API server on 
 ### Production Build
 
 ```bash
-npm run build
-npm start
+pnpm build
+pnpm start
 ```
 
 This compiles the React frontend to `web/dist/` and the Express server to `web/server-dist/`. The server serves both the static files and the API from port 3001.

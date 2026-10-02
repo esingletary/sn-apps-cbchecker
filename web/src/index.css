@@ -1,3 +1,21 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* Live player tip alerts: slide in, hold, fade (lifetime matches TIP_MS). */
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@keyframes tip-out {
+  to {
+    opacity: 0;
+  }
+}
+.tip-alert {
+  animation:
+    tip-in 200ms ease-out,
+    tip-out 500ms ease-in 5.5s forwards;
+}

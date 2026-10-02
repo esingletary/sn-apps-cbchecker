@@ -9,16 +9,31 @@ import IconButton from "../components/IconButton";
 import RoomCard from "../components/RoomCard";
 import AddRoomForm, { AddRoomDialog } from "../components/AddRoomForm";
 import Toast, { type ToastData } from "../components/Toast";
+import type { LiveStream } from "../liveStream";
+import { onServerEvent } from "../events";
 
 // Split out (with hls.js behind it) so the dashboard stays light.
 const StreamPlayer = lazy(() => import("../components/StreamPlayer"));
 
-// The server checks upstream continuously; reading its cache is cheap, so
-// check it often to pick up changes soon after they land.
-const POLL_MS = 15_000;
+// Status changes arrive live over /api/events; this poll is only a backstop
+// (and refreshes "Updated …") in case the stream is down.
+const POLL_MS = 60_000;
 // Past this, the server is probably being rate-limited; say so.
 const STALE_MS = 3 * 60_000;
 const UNDO_MS = 5_000;
+
+// Rooms nobody can be watching in: hidden unless "Show offline" is on.
+// Shows (private, away, ...) stay visible since the person is online.
+const OFFLINE_CATEGORIES = new Set(["offline", "not_found", "error"]);
+const SHOW_OFFLINE_KEY = "cbchecker.showOffline";
+
+function loadShowOffline(): boolean {
+  try {
+    return localStorage.getItem(SHOW_OFFLINE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function placeholderStatus(username: string): RoomStatus {
   return { username, isLive: false, roomStatus: "unknown", checkedAt: null, liveSince: null, lastLiveAt: null };
@@ -36,6 +51,16 @@ export default function Dashboard() {
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
   const pendingTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const now = useNow(15_000);
+  const [showOffline, setShowOffline] = useState(loadShowOffline);
+  const toggleOffline = () =>
+    setShowOffline((prev) => {
+      try {
+        localStorage.setItem(SHOW_OFFLINE_KEY, prev ? "0" : "1");
+      } catch {
+        // Storage blocked (private mode): the toggle just won't stick.
+      }
+      return !prev;
+    });
 
   const showToast = useCallback((t: Omit<ToastData, "id">) => setToast({ ...t, id: Date.now() }), []);
   const showError = useCallback((message: string) => showToast({ message, tone: "error" }), [showToast]);
@@ -44,17 +69,21 @@ export default function Dashboard() {
 
   // The player is a history entry, so the back button/gesture closes it
   // (important in the installed PWA, which has no browser chrome).
-  const [playing, setPlaying] = useState<string | null>(null);
-  const openPlayer = useCallback((username: string) => {
+  // `handoff` is a hover preview's stream for the player to take over.
+  const [playing, setPlaying] = useState<{ username: string; handoff?: LiveStream } | null>(null);
+  const openPlayer = useCallback((username: string, handoff?: LiveStream) => {
     history.pushState({ cbPlayer: username }, "");
-    setPlaying(username);
+    setPlaying({ username, handoff });
   }, []);
   const closePlayer = useCallback(() => {
     if (history.state?.cbPlayer) history.back();
     else setPlaying(null);
   }, []);
   useEffect(() => {
-    const onPop = () => setPlaying(history.state?.cbPlayer ?? null);
+    const onPop = () => {
+      const username: string | undefined = history.state?.cbPlayer;
+      setPlaying(username ? { username } : null);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -77,6 +106,17 @@ export default function Dashboard() {
   }, []);
 
   useVisiblePolling(loadStatuses, POLL_MS);
+
+  useEffect(() => {
+    const offStatus = onServerEvent<RoomStatus>("status", (s) =>
+      setStatuses((prev) => new Map(prev).set(s.username, s))
+    );
+    const offOpen = onServerEvent("open", loadStatuses);
+    return () => {
+      offStatus();
+      offOpen();
+    };
+  }, [loadStatuses]);
 
   // A removal still in its undo window goes through if the page is closed.
   useEffect(() => {
@@ -146,7 +186,27 @@ export default function Dashboard() {
     .map((room) => ({ room, status: statuses.get(room.username) ?? placeholderStatus(room.username) }))
     .sort((a, b) => compareStatuses(a.status, b.status));
 
-  const liveCount = entries.filter((e) => categorize(e.status) === "live").length;
+  const isOffline = (e: (typeof entries)[number]) => OFFLINE_CATEGORIES.has(categorize(e.status));
+  const offlineCount = entries.filter(isOffline).length;
+  const visible = showOffline ? entries : entries.filter((e) => !isOffline(e));
+
+  // In dashboard order (busiest first), for next/previous in the player.
+  const liveOrder = entries.filter((e) => categorize(e.status) === "live").map((e) => e.room.username);
+  const liveCount = liveOrder.length;
+
+  // Steps through live rooms, wrapping. Replaces the history entry so back
+  // still closes the player rather than walking through every room seen.
+  const switchRoom = (step: 1 | -1) => {
+    if (!playing) return;
+    const others = liveOrder.filter((u) => u !== playing.username);
+    if (!others.length) return;
+    const i = liveOrder.indexOf(playing.username);
+    // If the current room has dropped out of live, start from the top.
+    const next = i === -1 ? liveOrder[step === 1 ? 0 : liveOrder.length - 1] : liveOrder[(i + step + liveOrder.length) % liveOrder.length];
+    history.replaceState({ cbPlayer: next }, "");
+    setPlaying({ username: next });
+  };
+  const canSwitch = playing !== null && liveOrder.some((u) => u !== playing.username);
   const showCount = entries.filter((e) => categorize(e.status) === "show").length;
   const updatedAt = entries.reduce<string | null>(
     (latest, e) => (e.status.checkedAt && (!latest || e.status.checkedAt > latest) ? e.status.checkedAt : latest),
@@ -209,6 +269,18 @@ export default function Dashboard() {
           <p>
             <span className={liveCount ? "font-medium text-red-600 dark:text-red-400" : ""}>{liveCount} live</span>
             {showCount > 0 && <> · {showCount} in shows</>} · {entries.length} saved
+            {offlineCount > 0 && (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  onClick={toggleOffline}
+                  className="underline decoration-stone-300 underline-offset-2 hover:text-stone-800 dark:decoration-stone-600 dark:hover:text-stone-200"
+                >
+                  {showOffline ? "Hide offline" : `Show ${offlineCount} offline`}
+                </button>
+              </>
+            )}
           </p>
           {updatedAt && (
             <p
@@ -221,14 +293,17 @@ export default function Dashboard() {
             </p>
           )}
         </div>
+        {visible.length === 0 && (
+          <p className="py-16 text-center text-sm text-stone-400 dark:text-stone-500">Nobody's online right now.</p>
+        )}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-          {entries.map(({ room, status }) => (
+          {visible.map(({ room, status }) => (
             <RoomCard
               key={room.id}
               status={status}
               now={now}
               onRemove={() => handleRemove(room)}
-              onPlay={() => openPlayer(room.username)}
+              onPlay={(stream) => openPlayer(room.username, stream)}
             />
           ))}
         </div>
@@ -242,7 +317,15 @@ export default function Dashboard() {
       {addOpen && <AddRoomDialog onAdd={handleAdd} onClose={closeAdd} />}
       {playing && (
         <Suspense fallback={<div className="fixed inset-0 z-50 bg-black" />}>
-          <StreamPlayer key={playing} username={playing} onClose={closePlayer} />
+          <StreamPlayer
+            key={playing.username}
+            username={playing.username}
+            status={statuses.get(playing.username)}
+            handoff={playing.handoff}
+            onClose={closePlayer}
+            onPrev={canSwitch ? () => switchRoom(-1) : undefined}
+            onNext={canSwitch ? () => switchRoom(1) : undefined}
+          />
         </Suspense>
       )}
       <Toast toast={toast} durationMs={UNDO_MS} onDismiss={dismissToast} />

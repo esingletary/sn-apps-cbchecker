@@ -13,6 +13,14 @@ export interface RoomStatus {
   checkedAt: string | null;
   liveSince: string | null;
   lastLiveAt: string | null;
+  numViewers?: number | null;
+  roomTitle?: string | null;
+  // Last known profile photo (upstream only sends it while live).
+  avatarUrl?: string | null;
+  // Why a room is hidden, e.g. "ClassicTicket\n\nHidden Cam show in progress."
+  statusMessage?: string | null;
+  // Tips from the server's recent window (epoch ms); see recentTipTokens().
+  recentTips?: { at: number; amount: number }[];
 }
 
 async function errorFrom(res: Response, fallback: string): Promise<Error> {
@@ -53,10 +61,19 @@ export async function fetchRoomStatuses(): Promise<RoomStatus[]> {
   return res.json();
 }
 
+// A tip in a saved room, pushed live over /api/events.
+export interface TipEvent {
+  username: string;
+  amount: number;
+  from: string | null; // null when anonymous
+  message: string;
+}
+
 export class StreamUnavailableError extends Error {}
 
-// Fresh tokenised HLS URL. Throws StreamUnavailableError when the room isn't
-// in a public show (offline, private, ...), so the player can say so.
+// Fresh tokenised HLS URL, good for one playback session. Throws
+// StreamUnavailableError when the room isn't in a public show (offline,
+// private, ...), so the player can say so.
 export async function fetchStreamUrl(username: string): Promise<string> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(username)}/stream`, { cache: "no-store" });
   if (res.status === 409) throw new StreamUnavailableError((await res.json()).error);

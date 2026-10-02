@@ -11,6 +11,7 @@
     "gen:icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
+    "ably": "^2.29.0",
     "express": "^5.0.0",
     "hls.js": "^1.6.0",
     "react": "^19.0.0",

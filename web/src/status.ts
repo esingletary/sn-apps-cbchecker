@@ -36,6 +36,8 @@ export function statusLabel(s: RoomStatus): string {
     case "live":
       return "Live";
     case "show":
+      // Ticket shows are hidden shows run by a ticket app, which says so.
+      if (s.roomStatus === "hidden" && /ticket/i.test(s.statusMessage ?? "")) return "Ticket show";
       return SHOW_LABELS[s.roomStatus] ?? s.roomStatus.replace(/^\w/, (c) => c.toUpperCase());
     case "offline":
       return "Offline";
@@ -52,6 +54,12 @@ export function compareStatuses(a: RoomStatus, b: RoomStatus): number {
   const ca = categorize(a);
   const cb = categorize(b);
   if (ca !== cb) return RANK[ca] - RANK[cb];
+  // Live: busiest first; rooms without a count yet (just went live) last.
+  if (ca === "live") {
+    const va = a.numViewers ?? -1;
+    const vb = b.numViewers ?? -1;
+    if (va !== vb) return vb - va;
+  }
   // Offline: most recently live first; never-seen-live last.
   if (ca === "offline") {
     const la = a.lastLiveAt ? Date.parse(a.lastLiveAt) : 0;
@@ -77,4 +85,16 @@ export function duration(iso: string, now: number): string {
   const mins = Math.max(0, Math.floor((now - Date.parse(iso)) / 60000));
   if (mins < 60) return `${mins}m`;
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+// 161, 1.2k, 12k
+export function formatViewers(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1).replace(/\.0$/, "")}k` : String(n);
+}
+
+// Tokens tipped in the last `windowMs`, judged against the browser's clock so
+// the hint fades without waiting for the server.
+export const TIP_WINDOW_MS = 5 * 60_000;
+export function recentTipTokens(s: RoomStatus, now: number, windowMs = TIP_WINDOW_MS): number {
+  return (s.recentTips ?? []).reduce((sum, t) => (now - t.at < windowMs ? sum + t.amount : sum), 0);
 }

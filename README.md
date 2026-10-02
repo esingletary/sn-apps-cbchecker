@@ -50,7 +50,9 @@ cbchecker/
 │       └── pages/
 │           └── Dashboard.tsx     # Main page (room grid + add form)
 └── data/
-    └── rooms.json            # Room storage (created at runtime)
+    ├── rooms.json            # Room storage (created at runtime)
+    ├── status.json           # Last known statuses (a disposable cache)
+    └── history.jsonl         # Append-only status-change log, for schedules
 ```
 
 ## Getting Started
@@ -129,7 +131,7 @@ All endpoints are prefixed with `/api`.
    Last known statuses are saved to `data/status.json` (every minute and on shutdown), so a restart doesn't reset every room to "Checking…".
 3. Transient failures (timeouts, 5xx, challenge pages) keep the last good status instead of flipping the room to offline. A 404 is reported as `not_found`.
 4. `GET /api/rooms/status` answers instantly from the cache, so any number of open tabs cost no extra upstream requests.
-5. Live/offline transitions are written to `rooms.json` (`live_since`, `last_live_at`) so history survives restarts.
+5. Live/offline transitions are written to `rooms.json` (`live_since`, `last_live_at`) so the current session survives restarts. Every status change is also appended to `data/history.jsonl` (raw transitions plus server start/stop/heartbeat markers, see the comment at `HISTORY_FILE`), to learn rooms' schedules over time.
 6. The frontend gets changes over `/api/events` as they happen, and re-reads the cache every 60 seconds while visible (and after the event stream reconnects) as a backstop.
 
 ### In-app playback

@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from "fs";
 import { PushClient, type Tip } from "./push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +12,16 @@ const DB_FILE = path.join(DATA_DIR, "rooms.json");
 // Last known status per room, so a restart doesn't reset every card to
 // "Checking…" and fire a burst of upstream requests. Disposable cache.
 const STATUS_FILE = path.join(DATA_DIR, "status.json");
+// Append-only log of status changes, for learning rooms' schedules over time.
+// Raw transitions, not sessions: how to merge blips or count shows is left to
+// whatever reads it. One JSON object per line:
+//   {"t":ISO,"u":"name","s":"public"}  status changed (first line per room
+//       after a start is its baseline). Leaving "public" adds "peak" (max
+//       viewers seen); a poll-detected start adds "since" (upstream start).
+//   {"t":ISO,"event":"start"|"stop"|"alive"}  server lifecycle; "alive"
+//       every HISTORY_HEARTBEAT_MS, so a crash shows as a gap, not as offline.
+const HISTORY_FILE = path.join(DATA_DIR, "history.jsonl");
+const HISTORY_HEARTBEAT_MS = 10 * 60_000;
 
 // Background checker tuning. Chaturbate rate-limits per IP (HTTP 429, no
 // Retry-After or limit headers), so instead of polling in bursts we check one
@@ -238,12 +248,48 @@ function saveStatusCache(): void {
   }
 }
 
+// --- Status history ----------------------------------------------------------
+
+const lastLogged = new Map<string, string>(); // per room, since this start
+const peakViewers = new Map<string, number>(); // during the current public stretch
+
+function logHistory(entry: Record<string, unknown>): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(HISTORY_FILE, JSON.stringify({ t: new Date().toISOString(), ...entry }) + "\n");
+  } catch (err) {
+    console.warn("couldn't append history:", (err as Error).message);
+  }
+}
+
+function recordHistory(check: Check): void {
+  const u = check.username;
+  // Our own placeholders say nothing about the room.
+  if (check.roomStatus === "unknown" || check.roomStatus === "error") return;
+  if (!rooms.some((r) => r.username === u)) return;
+  if (check.isLive && check.numViewers != null) {
+    peakViewers.set(u, Math.max(peakViewers.get(u) ?? 0, check.numViewers));
+  }
+  const prev = lastLogged.get(u);
+  if (prev === check.roomStatus) return;
+  lastLogged.set(u, check.roomStatus);
+  const entry: Record<string, unknown> = { u, s: check.roomStatus };
+  if (check.isLive && check.startedAt) entry.since = check.startedAt;
+  if (prev === "public") {
+    const peak = peakViewers.get(u);
+    if (peak != null) entry.peak = peak;
+    peakViewers.delete(u);
+  }
+  logHistory(entry);
+}
+
 function cacheCheck(check: Check): void {
   const avatarUrl = check.avatarUrl ?? statusCache.get(check.username)?.avatarUrl ?? null;
   check = { ...check, avatarUrl };
   statusCache.set(check.username, check);
   statusDirty = true;
   recordLiveTransition(check);
+  recordHistory(check);
   const room = rooms.find((r) => r.username === check.username);
   if (room) broadcast("status", roomStatus(room));
 }
@@ -381,6 +427,7 @@ async function checkLoop(): Promise<void> {
 }
 
 const statusSaveTimer = setInterval(saveStatusCache, STATUS_SAVE_INTERVAL_MS);
+const historyHeartbeat = setInterval(() => logHistory({ event: "alive" }), HISTORY_HEARTBEAT_MS);
 
 // --- Push ----------------------------------------------------------------------
 
@@ -661,6 +708,7 @@ app.use((_req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log(`CB Checker server running on http://localhost:${PORT} (data: ${DATA_DIR}, ${rooms.length} rooms)`);
+  logHistory({ event: "start" });
   checkLoop();
   syncPushRooms();
 });
@@ -671,10 +719,12 @@ function shutdown(signal: string) {
   clearTimeout(checkTimer);
   clearInterval(statusSaveTimer);
   clearInterval(eventKeepalive);
+  clearInterval(historyHeartbeat);
   push.stop();
   // Open event streams would otherwise hold server.close() up.
   for (const res of eventClients) res.end();
   saveStatusCache();
+  logHistory({ event: "stop" });
   server.close(() => process.exit(0));
   // Don't let in-flight upstream requests hold the exit hostage.
   setTimeout(() => process.exit(0), 5000).unref();

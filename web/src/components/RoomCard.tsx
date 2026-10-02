@@ -87,7 +87,8 @@ export default function RoomCard({
   // Remember which thumbnail URL failed so a later refresh gets a fresh try.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const showThumb = cat === "live" && failedSrc !== src;
-  const tipTokens = recentTipTokens(status, now);
+  // Live only: offline rooms get tipped too, but that isn't a busy room.
+  const tipTokens = cat === "live" ? recentTipTokens(status, now) : 0;
   const avatar = status.avatarUrl ?? null;
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const showAvatar = !showThumb && cat !== "unknown" && avatar !== null && failedAvatar !== avatar;

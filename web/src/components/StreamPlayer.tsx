@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchStreamUrl, roomUrl, StreamUnavailableError, type RoomStatus, type TipEvent } from "../api";
+import { fetchStreamUrl, roomUrl, StreamUnavailableError, type RoomStatus } from "../api";
 import { formatViewers, statusLabel } from "../status";
-import { onServerEvent } from "../events";
+import { TipAlertStack, useTipAlerts } from "./TipAlerts";
 import { LiveStream } from "../liveStream";
 
 type State = { kind: "loading" } | { kind: "playing" } | { kind: "error"; message: string };
@@ -9,31 +9,6 @@ type State = { kind: "loading" } | { kind: "playing" } | { kind: "error"; messag
 // How many times to fetch a fresh token and reconnect after a fatal error
 // before giving up (tokens expire; edges hiccup).
 const MAX_RECONNECTS = 2;
-
-// Tip alerts: newest at the bottom, each fading out after TIP_MS (the fade is
-// CSS, see .tip-alert). A burst of tips stacks up, which is the point: it
-// shows the room's momentum.
-const TIP_MS = 6_000;
-const MAX_TIPS = 5;
-let tipSeq = 0;
-
-function TipAlert({ tip }: { tip: TipEvent }) {
-  const tier =
-    tip.amount >= 500
-      ? "bg-orange-600/90 ring-orange-300/50 text-base"
-      : tip.amount >= 100
-        ? "bg-amber-500/85 ring-amber-200/40 text-sm"
-        : "bg-black/60 ring-white/20 text-sm";
-  return (
-    <div className={`tip-alert w-fit max-w-full rounded-lg px-2.5 py-1.5 text-white shadow-lg ring-1 backdrop-blur-sm ${tier}`}>
-      <p className="truncate">
-        <span className="font-semibold tabular-nums">🪙 {tip.amount.toLocaleString()}</span>{" "}
-        <span className="opacity-90">{tip.from ?? "Anonymous"}</span>
-      </p>
-      {tip.message && <p className="mt-0.5 truncate text-xs opacity-80">{tip.message}</p>}
-    </div>
-  );
-}
 
 // Full-screen overlay that plays a room's HLS stream straight from the CDN.
 // Opened from a hover preview, it takes over that stream (`handoff`) and just
@@ -45,6 +20,7 @@ export default function StreamPlayer({
   onClose,
   onPrev,
   onNext,
+  onRelease,
 }: {
   username: string;
   // Live from the dashboard (pushed), for the header's viewers/title/badge.
@@ -54,24 +30,18 @@ export default function StreamPlayer({
   // Previous/next live room; absent when there's nowhere to go.
   onPrev?: () => void;
   onNext?: () => void;
+  // Given a handoff stream, hand it back on close instead of ending it (the
+  // multi-view tile it came from takes it again).
+  onRelease?: (stream: LiveStream) => void;
 }) {
   // The <video> belongs to the LiveStream, not React, so it's placed in here.
   const boxRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<LiveStream | null>(null);
+  const releaseRef = useRef(onRelease);
+  releaseRef.current = onRelease;
   const [state, setState] = useState<State>({ kind: "loading" });
   const [muted, setMuted] = useState(true);
-  const [tips, setTips] = useState<(TipEvent & { id: number })[]>([]);
-
-  useEffect(
-    () =>
-      onServerEvent<TipEvent>("tip", (tip) => {
-        if (tip.username !== username) return;
-        const id = ++tipSeq;
-        setTips((prev) => [...prev.slice(-(MAX_TIPS - 1)), { ...tip, id }]);
-        setTimeout(() => setTips((prev) => prev.filter((t) => t.id !== id)), TIP_MS);
-      }),
-    [username]
-  );
+  const tips = useTipAlerts(username, 5);
 
   useEffect(() => {
     // StrictMode's dev remount finds the handoff already destroyed.
@@ -133,7 +103,15 @@ export default function StreamPlayer({
       cancelled = true;
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("volumechange", onVolume);
-      stream.destroy();
+      if (adopted && releaseRef.current && !stream.destroyed) {
+        stream.onFatal = null;
+        video.controls = false;
+        video.classList.remove("invisible");
+        stream.park();
+        releaseRef.current(stream);
+      } else {
+        stream.destroy();
+      }
     };
   }, [username, handoff]);
 
@@ -284,13 +262,7 @@ export default function StreamPlayer({
       >
         <div ref={boxRef} className="contents" />
 
-        {tips.length > 0 && (
-          <div className="pointer-events-none absolute left-3 top-3 flex max-w-[60vw] flex-col items-start gap-1.5 sm:max-w-sm">
-            {tips.map((t) => (
-              <TipAlert key={t.id} tip={t} />
-            ))}
-          </div>
-        )}
+        <TipAlertStack tips={tips} />
 
         {state.kind === "loading" && (
           <div className="absolute inset-0 flex items-center justify-center">

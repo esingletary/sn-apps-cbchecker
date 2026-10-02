@@ -8,8 +8,9 @@ A self-hosted Chaturbate room tracker. Save your favorite rooms and check at a g
 - **Live status at a glance** -- Live rooms first (busiest first) with a live thumbnail, viewer count and "live for 23m"; private/group/ticket shows shown distinctly; offline rooms sorted by "last live 3h ago" and hidden unless "Show offline" is on
 - **Instant updates** -- Status, title and tip events arrive over Chaturbate's own realtime push and stream to the browser; a slow background poll backs it up
 - **Hover preview** -- Rest the pointer on a live card for a muted live preview; clicking carries the same stream into the full player
+- **Multi-view** -- Up to 2×2 live rooms at once, filled with the busiest; tap a tile for its sound, swap rooms from a thumbnail picker, expand one to the full player and come back. Rooms that go private/offline are replaced automatically
 - **Watch in-app** -- Full-screen player with viewer count, room title, live tip alerts, and ←/→ (or swipe) to flip between live rooms; cmd/ctrl-click still opens the site
-- **Busy hint** -- 🔥 on cards whose room has seen 100+ tokens tipped in the last 5 minutes
+- **Busy hint** -- 🔥 on live cards whose room has seen 100+ tokens tipped in the last 5 minutes
 - **Undo** -- Removing a room can be undone for 5 seconds
 - **Installable PWA** -- Add to home screen on iOS/Android; app shell is precached
 - **Lightweight** -- Single Express server + React SPA, JSON file storage

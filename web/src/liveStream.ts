@@ -56,6 +56,9 @@ export class LiveStream {
         backBufferLength: 30,
         capLevelToPlayerSize: true,
         startLevel: lowStart ? 0 : -1,
+        // Jump back to the live edge if playback falls this many target
+        // durations behind (after a stall, or a resume from suspend()).
+        liveMaxLatencyDurationCount: 10,
       });
       hls.on(HlsCtor.Events.ERROR, (_e, data) => {
         if (!data.fatal || this.hls !== hls) return;
@@ -73,6 +76,26 @@ export class LiveStream {
     }
     video.play().catch(() => {});
     return true;
+  }
+
+  // Stops downloading and pauses, keeping the session (for a hidden tile).
+  suspend(): void {
+    this.hls?.stopLoad();
+    this.video.pause();
+  }
+
+  // Undoes suspend(), back at the live edge. If the session lapsed meanwhile,
+  // the load fails and the owner's onFatal reconnects as usual.
+  resume(): void {
+    const video = this.video;
+    if (this.hls) {
+      this.hls.startLoad(-1);
+      const live = this.hls.liveSyncPosition;
+      if (live != null) video.currentTime = live;
+    } else if (video.seekable.length) {
+      video.currentTime = Math.max(video.seekable.end(video.seekable.length - 1) - 3, 0);
+    }
+    video.play().catch(() => {});
   }
 
   // Holds the element, hidden, in the document while it changes owners: a

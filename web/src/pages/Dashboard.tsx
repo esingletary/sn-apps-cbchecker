@@ -14,6 +14,7 @@ import { onServerEvent } from "../events";
 
 // Split out (with hls.js behind it) so the dashboard stays light.
 const StreamPlayer = lazy(() => import("../components/StreamPlayer"));
+const MultiView = lazy(() => import("../components/MultiView"));
 
 // Status changes arrive live over /api/events; this poll is only a backstop
 // (and refreshes "Updated …") in case the stream is down.
@@ -70,7 +71,11 @@ export default function Dashboard() {
   // The player is a history entry, so the back button/gesture closes it
   // (important in the installed PWA, which has no browser chrome).
   // `handoff` is a hover preview's stream for the player to take over.
-  const [playing, setPlaying] = useState<{ username: string; handoff?: LiveStream } | null>(null);
+  // `fromMulti`: opened by expanding a multi-view tile, which stays mounted
+  // underneath and gets the stream back on close.
+  const [playing, setPlaying] = useState<{ username: string; handoff?: LiveStream; fromMulti?: boolean } | null>(
+    null
+  );
   const openPlayer = useCallback((username: string, handoff?: LiveStream) => {
     history.pushState({ cbPlayer: username }, "");
     setPlaying({ username, handoff });
@@ -79,10 +84,30 @@ export default function Dashboard() {
     if (history.state?.cbPlayer) history.back();
     else setPlaying(null);
   }, []);
+  // Multi-view is a history entry too.
+  const [multiOpen, setMultiOpen] = useState(false);
+  const openMulti = () => {
+    history.pushState({ cbMulti: true }, "");
+    setMultiOpen(true);
+  };
+  const closeMulti = useCallback(() => {
+    if (history.state?.cbMulti) history.back();
+    else setMultiOpen(false);
+  }, []);
+  // A tile opened full-size: the player takes over the tile's stream on top
+  // of the (suspended) grid; back returns to the grid and the stream to its tile.
+  const expandFromMulti = useCallback((username: string, handoff?: LiveStream) => {
+    history.pushState({ cbPlayer: username, cbFromMulti: true }, "");
+    setPlaying({ username, handoff, fromMulti: true });
+  }, []);
+  const [returned, setReturned] = useState<{ username: string; stream: LiveStream } | null>(null);
+  const clearReturned = useCallback(() => setReturned(null), []);
   useEffect(() => {
     const onPop = () => {
-      const username: string | undefined = history.state?.cbPlayer;
-      setPlaying(username ? { username } : null);
+      const state = history.state;
+      const username: string | undefined = state?.cbPlayer;
+      setPlaying(username ? { username, fromMulti: Boolean(state.cbFromMulti) } : null);
+      setMultiOpen(Boolean(state?.cbMulti || state?.cbFromMulti));
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -203,8 +228,8 @@ export default function Dashboard() {
     const i = liveOrder.indexOf(playing.username);
     // If the current room has dropped out of live, start from the top.
     const next = i === -1 ? liveOrder[step === 1 ? 0 : liveOrder.length - 1] : liveOrder[(i + step + liveOrder.length) % liveOrder.length];
-    history.replaceState({ cbPlayer: next }, "");
-    setPlaying({ username: next });
+    history.replaceState({ ...history.state, cbPlayer: next }, "");
+    setPlaying({ username: next, fromMulti: playing.fromMulti });
   };
   const canSwitch = playing !== null && liveOrder.some((u) => u !== playing.username);
   const showCount = entries.filter((e) => categorize(e.status) === "show").length;
@@ -223,6 +248,16 @@ export default function Dashboard() {
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </IconButton>
+        {liveCount >= 2 && (
+          <IconButton onClick={openMulti} title="Multi-view: watch several live rooms">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7.5" height="7.5" rx="1" />
+              <rect x="13.5" y="3" width="7.5" height="7.5" rx="1" />
+              <rect x="3" y="13.5" width="7.5" height="7.5" rx="1" />
+              <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1" />
+            </svg>
+          </IconButton>
+        )}
         <IconButton onClick={handleRefresh} disabled={refreshing} title="Reload">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -325,6 +360,22 @@ export default function Dashboard() {
             onClose={closePlayer}
             onPrev={canSwitch ? () => switchRoom(-1) : undefined}
             onNext={canSwitch ? () => switchRoom(1) : undefined}
+            onRelease={
+              playing.fromMulti ? (stream) => setReturned({ username: playing.username, stream }) : undefined
+            }
+          />
+        </Suspense>
+      )}
+      {multiOpen && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 bg-black" />}>
+          <MultiView
+            liveOrder={liveOrder}
+            statuses={statuses}
+            suspended={playing !== null}
+            returned={returned}
+            onAdopted={clearReturned}
+            onClose={closeMulti}
+            onExpand={expandFromMulti}
           />
         </Suspense>
       )}
